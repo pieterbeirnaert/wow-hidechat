@@ -18,6 +18,8 @@ local typing = false
 local applying = false
 local hooked = {}
 local wantShown = {} -- frames Blizzard wants visible while we keep them hidden
+local savedAlpha = {} -- edit boxes we faded out, with the alpha to restore
+local unread = {} -- names of people who whispered while chat was hidden
 local minimapButton
 
 local function suppressed()
@@ -80,15 +82,83 @@ local function hookFrame(frame)
   end
 end
 
+local function editBoxes()
+  local list, seen = {}, {}
+  local function add(name)
+    local box = _G[name .. "EditBox"]
+    if box and not seen[box] then
+      seen[box] = true
+      list[#list + 1] = box
+    end
+  end
+  for i = 1, (NUM_CHAT_WINDOWS or 10) do
+    add("ChatFrame" .. i)
+  end
+  if CHAT_FRAMES then
+    for _, name in ipairs(CHAT_FRAMES) do add(name) end
+  end
+  return list
+end
+
+local apply
+
+local function startTyping()
+  if typing or not (db and db.hidden) then return end
+  typing = true
+  apply()
+end
+
+local function stopTyping()
+  if not typing then return end
+  typing = false
+  apply()
+end
+
+-- Edit boxes are faded instead of hidden so they can still take focus when
+-- you press Enter.
+local function hookEditBox(box)
+  if hooked[box] then return end
+  hooked[box] = true
+  box:HookScript("OnEditFocusGained", startTyping)
+  box:HookScript("OnEditFocusLost", stopTyping)
+  hooksecurefunc(box, "SetAlpha", function(self, alpha)
+    if applying or not suppressed() then return end
+    savedAlpha[self] = alpha
+    applying = true
+    self:SetAlpha(0)
+    applying = false
+  end)
+end
+
 local function updateMinimapIcon()
   if not minimapButton then return end
   minimapButton.icon:SetDesaturated(db.hidden)
   minimapButton.icon:SetAlpha(db.hidden and 0.6 or 1)
+  local count = #unread
+  if count > 0 then
+    minimapButton.count:SetText(count)
+    minimapButton.count:Show()
+    minimapButton.glow:Show()
+    minimapButton.pulse:Play()
+  else
+    minimapButton.count:Hide()
+    minimapButton.pulse:Stop()
+    minimapButton.glow:Hide()
+  end
 end
 
-local function apply()
+function apply()
   if not db then return end
   if suppressed() then
+    for _, box in ipairs(editBoxes()) do
+      hookEditBox(box)
+      if savedAlpha[box] == nil then
+        savedAlpha[box] = box:GetAlpha()
+        applying = true
+        box:SetAlpha(0)
+        applying = false
+      end
+    end
     for _, frame in ipairs(managedFrames()) do
       hookFrame(frame)
       if frame:IsShown() then
@@ -103,8 +173,13 @@ local function apply()
     for frame in pairs(wantShown) do
       frame:Show()
     end
+    for box, alpha in pairs(savedAlpha) do
+      box:SetAlpha(alpha)
+    end
     applying = false
     wipe(wantShown)
+    wipe(savedAlpha)
+    wipe(unread)
   end
   updateMinimapIcon()
 end
@@ -162,6 +237,29 @@ local function createMinimapButton()
   icon:SetPoint("TOPLEFT", 7, -6)
   button.icon = icon
 
+  -- Pink pulse + counter when someone whispers you while chat is hidden.
+  local glow = button:CreateTexture(nil, "OVERLAY", nil, 7)
+  glow:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+  glow:SetBlendMode("ADD")
+  glow:SetVertexColor(1, 0.5, 1)
+  glow:SetAllPoints(button)
+  glow:Hide()
+  button.glow = glow
+
+  local pulse = glow:CreateAnimationGroup()
+  pulse:SetLooping("BOUNCE")
+  local fade = pulse:CreateAnimation("Alpha")
+  fade:SetFromAlpha(0.15)
+  fade:SetToAlpha(1)
+  fade:SetDuration(0.6)
+  button.pulse = pulse
+
+  local count = button:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+  count:SetPoint("BOTTOMRIGHT", -5, 5)
+  count:SetTextColor(1, 0.5, 1)
+  count:Hide()
+  button.count = count
+
   local border = button:CreateTexture(nil, "OVERLAY")
   border:SetSize(53, 53)
   border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
@@ -178,6 +276,12 @@ local function createMinimapButton()
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
     GameTooltip:AddLine("HideChat")
     GameTooltip:AddLine(db.hidden and "Chat is hidden" or "Chat is visible", 1, 1, 1)
+    if #unread > 0 then
+      GameTooltip:AddLine("Whispers from:", 1, 0.5, 1)
+      for _, name in ipairs(unread) do
+        GameTooltip:AddLine("  " .. name, 1, 0.5, 1)
+      end
+    end
     GameTooltip:AddLine("Click to toggle, drag to move", 0.7, 0.7, 0.7)
     GameTooltip:Show()
   end)
@@ -196,20 +300,8 @@ local function hookIfExists(name, fn)
   if _G[name] then hooksecurefunc(name, fn) end
 end
 
-hookIfExists("ChatEdit_ActivateChat", function(editBox)
-  if not (db and db.hidden) or typing then return end
-  typing = true
-  apply()
-  if editBox and not editBox:HasFocus() then
-    editBox:SetFocus()
-  end
-end)
-
-hookIfExists("ChatEdit_DeactivateChat", function()
-  if not typing then return end
-  typing = false
-  apply()
-end)
+hookIfExists("ChatEdit_ActivateChat", startTyping)
+hookIfExists("ChatEdit_DeactivateChat", stopTyping)
 
 -- New whisper/temporary windows get hidden too.
 hookIfExists("FCF_OpenTemporaryWindow", apply)
@@ -238,7 +330,23 @@ end
 local events = CreateFrame("Frame")
 events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
-events:SetScript("OnEvent", function(self, event, arg1)
+events:RegisterEvent("CHAT_MSG_WHISPER")
+events:RegisterEvent("CHAT_MSG_BN_WHISPER")
+events:SetScript("OnEvent", function(self, event, arg1, arg2)
+  if event == "CHAT_MSG_WHISPER" or event == "CHAT_MSG_BN_WHISPER" then
+    if not suppressed() then return end
+    local sender = arg2 or "?"
+    if event == "CHAT_MSG_WHISPER" and Ambiguate then
+      sender = Ambiguate(sender, "short")
+    end
+    for _, name in ipairs(unread) do
+      if name == sender then return updateMinimapIcon() end
+    end
+    unread[#unread + 1] = sender
+    updateMinimapIcon()
+    return
+  end
+
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     HideChatDB = HideChatDB or {}
     db = HideChatDB
