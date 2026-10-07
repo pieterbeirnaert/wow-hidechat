@@ -1,4 +1,4 @@
-## Interface: 11507
+## Interface: 16001
 ## Title: HideChat
 ## Notes: Hides the chat windows. Toggle with the minimap button, /hidechat or a key binding.
 ## Author: Pieter Beirnaert

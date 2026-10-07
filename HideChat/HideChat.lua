@@ -192,7 +192,11 @@ end
 
 -- Show chat while typing ------------------------------------------------------
 
-hooksecurefunc("ChatEdit_ActivateChat", function(editBox)
+local function hookIfExists(name, fn)
+  if _G[name] then hooksecurefunc(name, fn) end
+end
+
+hookIfExists("ChatEdit_ActivateChat", function(editBox)
   if not (db and db.hidden) or typing then return end
   typing = true
   apply()
@@ -201,16 +205,15 @@ hooksecurefunc("ChatEdit_ActivateChat", function(editBox)
   end
 end)
 
-hooksecurefunc("ChatEdit_DeactivateChat", function()
+hookIfExists("ChatEdit_DeactivateChat", function()
   if not typing then return end
   typing = false
   apply()
 end)
 
 -- New whisper/temporary windows get hidden too.
-for _, fn in ipairs({ "FCF_OpenTemporaryWindow", "FCF_OpenNewWindow" }) do
-  if _G[fn] then hooksecurefunc(fn, apply) end
-end
+hookIfExists("FCF_OpenTemporaryWindow", apply)
+hookIfExists("FCF_OpenNewWindow", apply)
 
 -- Slash command ---------------------------------------------------------------
 
