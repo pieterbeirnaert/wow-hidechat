@@ -1,0 +1,8 @@
+## Interface: 11507
+## Title: HideChat
+## Notes: Hides the chat windows. Toggle with the minimap button, /hidechat or a key binding.
+## Author: Pieter Beirnaert
+## Version: 1.0.0
+## SavedVariables: HideChatDB
+
+HideChat.lua

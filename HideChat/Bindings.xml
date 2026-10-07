@@ -1,0 +1,5 @@
+<Bindings>
+  <Binding name="HIDECHAT_TOGGLE" header="HIDECHAT" category="ADDONS">
+    HideChat_Toggle()
+  </Binding>
+</Bindings>
